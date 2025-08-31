@@ -1,2 +1,8 @@
 .pytest_cache
 */__pycache__
+dist
+docs/_build
+docs/_static
+docs/_templates
+scorecardpl.egg-info
+site

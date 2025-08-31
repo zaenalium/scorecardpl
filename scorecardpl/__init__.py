@@ -11,6 +11,8 @@ from .lazy import woebin_ply_lazy, score_lazy, scan_parquet_select, sink_parquet
 from .shapcard import scorecard_shap, SHAPScorecardModel
 from .calibration import PointsCalibrator, fit_points_calibrator, calibrate_scorecard_from_data, make_points_proba_fn, fit_scorecard_predictor
 
+__version__ = "0.1.0"
+
 __all__ = [
     'split_df', 'var_filter',
     'woebin', 'woebin_plot', 'woebin_ply',

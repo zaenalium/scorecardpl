@@ -5,19 +5,14 @@ build:
   tools:
     python: "3.11"
 
-sphinx:
-  configuration: docs/conf.py
+mkdocs:
+  configuration: mkdocs.yml
 
 python:
   install:
     - method: pip
       path: .
-      extra_requirements:
-        - docs
-    - requirements: docs/requirements.txt
+    - requirements: docs/requirements-mkdocs.txt
 
 formats:
   - htmlzip
-  - pdf
-  - epub
-

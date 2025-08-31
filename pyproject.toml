@@ -33,3 +33,7 @@ docs = [
   "myst-parser>=2.0",
   "sphinx-rtd-theme>=2.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scorecardpl*"]
