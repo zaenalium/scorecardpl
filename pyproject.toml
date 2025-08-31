@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scorecardpl"
+version = "0.1.0"
+description = "A lightweight credit scoring toolkit (WOE/IV, binning, scorecard)"
+authors = [{ name = "Your Name" }]
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["credit scoring", "woe", "iv", "scorecard", "binning"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "pandas>=1.2",
+  "numpy>=1.22",
+  "scikit-learn>=1.0",
+  "matplotlib>=3.3",
+  "polars>=0.20",
+]
+
+[project.urls]
+Homepage = "https://example.com"
+Repository = "https://example.com/repo"
+
+[project.optional-dependencies]
+docs = [
+  "sphinx>=7.2",
+  "myst-parser>=2.0",
+  "sphinx-rtd-theme>=2.0",
+]
