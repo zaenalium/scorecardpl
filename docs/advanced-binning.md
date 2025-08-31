@@ -47,6 +47,7 @@ bins = woebin(df, y='y', x=['job'], cat_max_bins=4, cat_method='target_rate')
 
 ```python
 from scorecardpl import woebin_plot
-woebin_plot(bins, save_dir='plots/woe', show=False)
+# Returns a mapping of variable -> saved image path (or None if shown)
+saved = woebin_plot(bins, save_dir='plots/woe', show=False)
+print(saved.get('age'))  # e.g., 'plots/woe/woe_age.png'
 ```
-

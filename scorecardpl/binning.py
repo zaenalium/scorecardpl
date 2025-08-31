@@ -10,6 +10,10 @@ from .utils import ensure_binary_target, to_pl_df, cut_expr
 
 
 def _woe_iv_for_bin(df: pl.DataFrame, y: str, bin_col: str) -> pl.DataFrame:
+    """Aggregate WOE/IV stats for a given bin column.
+
+    Assumes binary target `y` in {0,1}. Null bins are kept as a separate row.
+    """
     total_good = df.select((pl.col(y) == 0).sum()).item()
     total_bad = df.select((pl.col(y) == 1).sum()).item()
     eps = 1e-9
@@ -57,6 +61,7 @@ def _maybe_sample_for_edges(
 
 
 def _numeric_edges_quantile(s: pl.Series, bins: int) -> List[float]:
+    """Compute numeric bin edges by quantiles, including [-inf, inf]."""
     vals = s.drop_nulls().to_numpy()
     if vals.size == 0:
         return [-np.inf, np.inf]
@@ -71,6 +76,7 @@ def _numeric_edges_quantile(s: pl.Series, bins: int) -> List[float]:
 
 
 def _numeric_edges_equal_width(s: pl.Series, bins: int) -> List[float]:
+    """Compute equal-width numeric bin edges, including [-inf, inf]."""
     vals = s.drop_nulls().to_numpy()
     if vals.size == 0:
         return [-np.inf, np.inf]
@@ -83,6 +89,7 @@ def _numeric_edges_equal_width(s: pl.Series, bins: int) -> List[float]:
 
 
 def _numeric_edges_tree(s: pl.Series, y: pl.Series, bins: int, min_leaf_frac: float = 0.05, random_state: Optional[int] = 42) -> List[float]:
+    """Derive edges via a decision tree on (s, y)."""
     try:
         from sklearn.tree import DecisionTreeClassifier  # type: ignore
     except Exception as e:
@@ -125,6 +132,11 @@ def _chi2_pair_stat(g1_bad, g1_good, g2_bad, g2_good, eps: float = 1e-9) -> floa
 
 
 def _numeric_edges_chi2(s: pl.Series, y: pl.Series, max_bins: int, init_bins: int = 50, min_bin_size: int = 1) -> List[float]:
+    """Chi-squared style adjacent-bin merging to find edges.
+
+    Starts from many quantile bins, then iteratively merges adjacent bins with
+    the smallest chi2 statistic until reaching `max_bins`.
+    """
     # prepare data
     x = s.to_numpy()
     yv = y.to_numpy().astype(float)
@@ -180,13 +192,13 @@ def _numeric_edges_chi2(s: pl.Series, y: pl.Series, max_bins: int, init_bins: in
             "right": b["right"],
         }
         bins_list[j:j+2] = [merged]
-    # finalize edges
+    # finalize edges (preserve order and drop duplicates)
     out_edges = [-np.inf]
     for b in bins_list[:-1]:
         out_edges.append(b["right"])  # boundary between bins
     out_edges.append(np.inf)
-    # ensure sorted, unique
-    out_edges = sorted(set(out_edges))
+    seen = set()
+    out_edges = [x for x in out_edges if (x not in seen and not seen.add(x))]
     # guarantee -inf..inf
     if out_edges[0] != -np.inf:
         out_edges = [-np.inf] + out_edges
@@ -241,12 +253,12 @@ def _numeric_edges_isotonic(
             start = i
     segs.append((start, len(yhat)))
     # If too many segments, merge by smallest delta between adjacent segment means
-    def seg_mean(si, sj):
-        i, j = si
+    def seg_mean(seg):
+        i, j = seg
         return float(yhat[i:j].mean())
     while len(segs) > max_bins:
-        # compute deltas
-        deltas = [abs(seg_mean(segs[k+1], segs[k]) - seg_mean(segs[k], segs[k])) for k in range(len(segs)-1)]
+        # compute deltas as |mean(next) - mean(current)|
+        deltas = [abs(seg_mean(segs[k+1]) - seg_mean(segs[k])) for k in range(len(segs)-1)]
         kmin = int(np.argmin(deltas))
         new_seg = (segs[kmin][0], segs[kmin+1][1])
         segs[kmin:kmin+2] = [new_seg]
@@ -257,6 +269,7 @@ def _numeric_edges_isotonic(
 
 
 def _enforce_monotonic_woe(stat: pl.DataFrame, direction: Optional[Literal['increasing','decreasing','auto']] = 'auto', min_bins: int = 3) -> pl.DataFrame:
+    """Enforce monotonic WOE by merging adjacent bins with smallest deltas."""
     if 'ord' not in stat.columns:
         return stat
     d = stat.sort('ord')
@@ -447,17 +460,48 @@ def woebin(
 
     out: Dict[str, pl.DataFrame] = {}
     base = df.with_columns(pl.col(y).cast(pl.Int64))
+    def _is_numeric_dtype(dt) -> bool:
+        # Prefer modern Polars dtype API
+        try:
+            is_num = getattr(dt, "is_numeric", None)
+            if callable(is_num):
+                return bool(is_num())
+            if isinstance(is_num, bool):
+                return is_num
+        except Exception:
+            pass
+        try:
+            from polars import (
+                Int8, Int16, Int32, Int64,
+                UInt8, UInt16, UInt32, UInt64,
+                Float32, Float64,
+            )
+            return dt in {Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64}
+        except Exception:
+            return False
+
     for col in x:
         s = base.get_column(col)
-        if s.dtype in pl.NUMERIC_DTYPES:
+        if _is_numeric_dtype(s.dtype):
             # numeric: choose method and build edges
             if breaks and col in breaks:
-                e = list(sorted(set(breaks[col])))
-                if e[0] != -np.inf:
-                    e = [-np.inf] + e
-                if e[-1] != np.inf:
-                    e = e + [np.inf]
-                edges = e
+                e = list(breaks[col])
+                if len(e) == 0:
+                    edges = [-np.inf, np.inf]
+                else:
+                    # ensure sorted and unique while preserving order
+                    seen = set()
+                    e = [v for v in e if (v not in seen and not seen.add(v))]
+                    if any(isinstance(v, (float, int)) for v in e):
+                        e = sorted(e)
+                    # include boundaries
+                    if e[0] != -np.inf:
+                        e = [-np.inf] + e
+                    if e[-1] != np.inf:
+                        e = e + [np.inf]
+                    if len(e) < 2:
+                        e = [-np.inf, np.inf]
+                    edges = e
             elif method == 'equal_width':
                 s_samp, _ = _maybe_sample_for_edges(s, None, edges_sample_n, edges_sample_frac, edges_sample_seed)
                 edges = _numeric_edges_equal_width(s_samp, bins)
@@ -553,6 +597,7 @@ def woebin_plot(
     vars_to_plot = [var] if var else list(bins.keys())
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
+    saved: Dict[str, Optional[str]] = {}
     for v in vars_to_plot:
         d = bins[v]
         # extract columns as Python lists
@@ -565,8 +610,12 @@ def woebin_plot(
         plt.ylabel('WOE')
         plt.tight_layout()
         if save_dir:
-            plt.savefig(os.path.join(save_dir, f"woe_{v}.png"), dpi=144)
+            path = os.path.join(save_dir, f"woe_{v}.png")
+            plt.savefig(path, dpi=144, bbox_inches='tight')
             if not show:
                 plt.close()
+            saved[v] = path
         if show and not save_dir:
             plt.show()
+            saved[v] = None
+    return saved if save_dir or show else {}

@@ -20,5 +20,9 @@ print(perf)
 
 scores = scorecard_ply(valid_w, sc.points_map)
 print(scores.head())
-```
 
+# Optional: plot WOE per variable and save to disk
+from scorecardpl import woebin_plot
+woe_paths = woebin_plot(bins, save_dir='plots/woe', show=False)
+print(woe_paths.get('age'))  # path to saved plot for 'age'
+```
