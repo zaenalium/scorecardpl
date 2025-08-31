@@ -72,14 +72,15 @@ def psi(df_ref: Any, df_cmp: Any, bins: Dict[str, pl.DataFrame]) -> pl.DataFrame
             continue
         labels = bdf.select('bin').to_series().to_list()
         # get counts per label, ensure all labels present
+        all_bins = pl.DataFrame({'bin': labels})
         ref_counts = (
-            ref_b.group_by(bin_col).len().rename({bin_col: 'bin', 'len': 'cnt'})
-            .join(pl.DataFrame({'bin': labels}), on='bin', how='outer')
+            all_bins
+            .join(ref_b.group_by(bin_col).len().rename({bin_col: 'bin', 'len': 'cnt'}), on='bin', how='left')
             .with_columns(pl.col('cnt').fill_null(0.0))
         )
         cmp_counts = (
-            cmp_b.group_by(bin_col).len().rename({bin_col: 'bin', 'len': 'cnt'})
-            .join(pl.DataFrame({'bin': labels}), on='bin', how='outer')
+            all_bins
+            .join(cmp_b.group_by(bin_col).len().rename({bin_col: 'bin', 'len': 'cnt'}), on='bin', how='left')
             .with_columns(pl.col('cnt').fill_null(0.0))
         )
         val = _psi_from_counts(ref_counts, cmp_counts)

@@ -13,5 +13,6 @@ io
 report
 online
 lazy
+shapcard
+calibration
 ```
-

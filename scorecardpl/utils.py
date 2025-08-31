@@ -100,3 +100,21 @@ def ensure_binary_target(s: Any) -> pl.Series:
     if vals.issubset({0, 1}):
         return s.cast(pl.Int64)
     raise ValueError("Target must be binary 0/1")
+
+
+def cut_expr(expr: pl.Expr, edges: Sequence[float], labels: Sequence[str]) -> pl.Expr:
+    """Polars expression that bins numeric values into interval labels.
+
+    Intervals follow (edges[i], edges[i+1]] semantics. Returns Utf8.
+    """
+    if len(labels) != len(edges) - 1:
+        raise ValueError("labels must be len(edges)-1")
+    # Build chained when-then for each interval
+    lower = float(edges[0])
+    upper = float(edges[1])
+    cond = pl.when((expr > lower) & (expr <= upper)).then(pl.lit(labels[0]))
+    for i in range(1, len(labels)):
+        lower = float(edges[i])
+        upper = float(edges[i + 1])
+        cond = cond.when((expr > lower) & (expr <= upper)).then(pl.lit(labels[i]))
+    return cond.otherwise(None).cast(pl.Utf8)

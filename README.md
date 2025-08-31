@@ -95,6 +95,11 @@ Documentation
   - `sphinx-build -b html docs/ docs/_build/html`
   - Optional live reload: `sphinx-autobuild docs/ docs/_build/html`
 
+SHAP-based scorecards
+- Build a scorecard from any sklearn classifier (e.g., RandomForest, XGBoost/LightGBM via sklearn wrappers) using SHAP values:
+  - `pip install shap` (and optionally `xgboost lightgbm`)
+  - See `examples/shap_example.py` and docs: `docs/shap-scorecard.md`
+
 
 ## Compare Binning Methods
 

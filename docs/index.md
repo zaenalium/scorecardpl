@@ -16,6 +16,6 @@ getting-started
 quickstart
 advanced-binning
 large-scale-guide
+shap-scorecard
 api/index
 ```
-

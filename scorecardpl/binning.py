@@ -4,19 +4,16 @@ from typing import Dict, List, Optional, Sequence, Literal, Mapping, Tuple
 
 import numpy as np
 import polars as pl
-import matplotlib.pyplot as plt
 import os
 
-from .utils import ensure_binary_target, to_pl_df
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.isotonic import IsotonicRegression
+from .utils import ensure_binary_target, to_pl_df, cut_expr
 
 
 def _woe_iv_for_bin(df: pl.DataFrame, y: str, bin_col: str) -> pl.DataFrame:
     total_good = df.select((pl.col(y) == 0).sum()).item()
     total_bad = df.select((pl.col(y) == 1).sum()).item()
     eps = 1e-9
-    agg = (
+    base = (
         df.group_by(bin_col)
         .agg(
             count=pl.len(),
@@ -24,13 +21,17 @@ def _woe_iv_for_bin(df: pl.DataFrame, y: str, bin_col: str) -> pl.DataFrame:
         )
         .with_columns(
             good=pl.col("count") - pl.col("bad"),
-            bad_rate=(pl.col("bad") / max(total_bad, eps)),
-            good_rate=(pl.col("good") / max(total_good, eps)),
         )
-        .with_columns(
-            woe=((pl.col("good_rate") + eps) / (pl.col("bad_rate") + eps)).log(),
-        )
-        .with_columns(iv=(pl.col("good_rate") - pl.col("bad_rate")) * pl.col("woe"))
+    )
+    agg = base.with_columns(
+        bad_rate=(pl.col("bad") / max(total_bad, eps)),
+        good_rate=(pl.col("good") / max(total_good, eps)),
+    )
+    agg = agg.with_columns(
+        woe=((pl.col("good_rate") + eps) / (pl.col("bad_rate") + eps)).log(),
+    )
+    agg = agg.with_columns(
+        iv=(pl.col("good_rate") - pl.col("bad_rate")) * pl.col("woe"),
     )
     return agg
 
@@ -82,6 +83,12 @@ def _numeric_edges_equal_width(s: pl.Series, bins: int) -> List[float]:
 
 
 def _numeric_edges_tree(s: pl.Series, y: pl.Series, bins: int, min_leaf_frac: float = 0.05, random_state: Optional[int] = 42) -> List[float]:
+    try:
+        from sklearn.tree import DecisionTreeClassifier  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "Tree-based binning requires scikit-learn. Install with `pip install scikit-learn`."
+        ) from e
     X = s.to_numpy().reshape(-1, 1)
     yv = y.to_numpy().astype(int)
     mask = ~np.isnan(X.ravel()) & ~np.isnan(yv)
@@ -195,6 +202,12 @@ def _numeric_edges_isotonic(
     increasing: Optional[bool] = None,
     tol: float = 1e-8,
 ) -> List[float]:
+    try:
+        from sklearn.isotonic import IsotonicRegression  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "Isotonic binning requires scikit-learn. Install with `pip install scikit-learn`."
+        ) from e
     x = s.to_numpy()
     yv = y.to_numpy().astype(float)
     mask = ~(np.isnan(x) | np.isnan(yv))
@@ -304,19 +317,20 @@ def _enforce_monotonic_woe(stat: pl.DataFrame, direction: Optional[Literal['incr
     bad_rate = [bad[i] / max(total_bad, 1e-9) for i in range(len(woe))]
     good_rate = [good[i] / max(total_good, 1e-9) for i in range(len(woe))]
     iv = [(good_rate[i] - bad_rate[i]) * woe[i] for i in range(len(woe))]
+    n = len(woe)
     out = pl.DataFrame({
-        'variable': [var]*len(woe),
-        'bin': bins_labels,
-        'ord': list(range(len(woe))),
-        'lower': lower,
-        'upper': upper,
-        'count': cnt,
-        'bad': bad,
-        'good': good,
-        'bad_rate': bad_rate,
-        'good_rate': good_rate,
-        'woe': woe,
-        'iv': iv,
+        'variable': pl.Series('variable', [var]*n, dtype=pl.Utf8),
+        'bin': pl.Series('bin', bins_labels, dtype=pl.Utf8),
+        'ord': pl.Series('ord', list(range(n)), dtype=pl.Int64),
+        'lower': pl.Series('lower', lower, dtype=pl.Float64),
+        'upper': pl.Series('upper', upper, dtype=pl.Float64),
+        'count': pl.Series('count', cnt, dtype=pl.Float64),
+        'bad': pl.Series('bad', bad, dtype=pl.Float64),
+        'good': pl.Series('good', good, dtype=pl.Float64),
+        'bad_rate': pl.Series('bad_rate', bad_rate, dtype=pl.Float64),
+        'good_rate': pl.Series('good_rate', good_rate, dtype=pl.Float64),
+        'woe': pl.Series('woe', woe, dtype=pl.Float64),
+        'iv': pl.Series('iv', iv, dtype=pl.Float64),
     })
     return out
 
@@ -471,7 +485,7 @@ def woebin(
                 edges = _numeric_edges_quantile(s_samp, bins)
             labels = [f"({edges[i]}, {edges[i+1]}]" for i in range(len(edges)-1)]
             sub = base.select([pl.col(y), pl.col(col)])
-            tmp = sub.with_columns(_bin=pl.cut(pl.col(col), bins=edges, labels=labels).cast(pl.Utf8))
+            tmp = sub.with_columns(_bin=cut_expr(pl.col(col), edges, labels))
             stat = _woe_iv_for_bin(tmp.select([y, "_bin"]), y=y, bin_col="_bin")
             # reconstruct order and bounds
             bounds = pl.DataFrame({
@@ -530,6 +544,12 @@ def woebin_plot(
     - save_dir: if provided, saves each plot as `<save_dir>/woe_<var>.png`.
     - show: whether to display the plot windows (ignored if running headless).
     """
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "Plotting requires matplotlib. Install with `pip install matplotlib`."
+        ) from e
     vars_to_plot = [var] if var else list(bins.keys())
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)

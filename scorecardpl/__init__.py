@@ -8,6 +8,8 @@ from .io import bins_export_json, bins_import_json
 from .report import write_method_report
 from .online import iter_parquet, iter_parquet_row_groups, scorecard_sgd, ScorecardOnlineModel
 from .lazy import woebin_ply_lazy, score_lazy, scan_parquet_select, sink_parquet_safe
+from .shapcard import scorecard_shap, SHAPScorecardModel
+from .calibration import PointsCalibrator, fit_points_calibrator, calibrate_scorecard_from_data, make_points_proba_fn, fit_scorecard_predictor
 
 __all__ = [
     'split_df', 'var_filter',
@@ -18,4 +20,7 @@ __all__ = [
     'bins_export_json', 'bins_import_json', 'write_method_report',
     'iter_parquet', 'iter_parquet_row_groups', 'scorecard_sgd', 'ScorecardOnlineModel',
     'woebin_ply_lazy', 'score_lazy', 'scan_parquet_select', 'sink_parquet_safe',
+    'scorecard_shap', 'SHAPScorecardModel',
+    'PointsCalibrator', 'fit_points_calibrator', 'calibrate_scorecard_from_data',
+    'make_points_proba_fn', 'fit_scorecard_predictor',
 ]

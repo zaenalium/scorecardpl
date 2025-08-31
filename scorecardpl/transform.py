@@ -4,7 +4,7 @@ from typing import Dict, Any
 
 import polars as pl
 
-from .utils import to_pl_df
+from .utils import to_pl_df, cut_expr
 
 
 def woebin_ply(df: Any, bins: Dict[str, pl.DataFrame], keep_bins: bool = True) -> pl.DataFrame:
@@ -24,21 +24,28 @@ def woebin_ply(df: Any, bins: Dict[str, pl.DataFrame], keep_bins: bool = True) -
             ]
             labels = bdf_sorted.select("bin").to_series().to_list()
             out = out.with_columns(
-                pl.cut(pl.col(var), bins=edges, labels=labels).cast(pl.Utf8).alias(f"{var}_bin")
+                cut_expr(pl.col(var), edges, labels).alias(f"{var}_bin")
             )
         else:
             # categorical
             if 'levels' in cols:
-                # build raw -> bin mapping
-                mapping = bdf.select([pl.col('bin'), pl.col('levels')]).explode('levels').rename({'levels': 'raw'})
+                # build raw -> bin mapping with names scoped to var to avoid collisions
+                mapping = (
+                    bdf
+                    .select([pl.col('bin'), pl.col('levels')])
+                    .explode('levels')
+                    .rename({'levels': f'__{var}_raw_key', 'bin': f'__{var}_bin_map'})
+                )
                 # handle nulls and unseen
                 out = out.with_columns(
                     pl.when(pl.col(var).is_null()).then(pl.lit('__NA__')).otherwise(pl.col(var).cast(pl.Utf8)).alias(f"__{var}_raw")
                 )
-                out = out.join(mapping, left_on=f"__{var}_raw", right_on='raw', how='left')
+                out = out.join(mapping, left_on=f"__{var}_raw", right_on=f'__{var}_raw_key', how='left')
                 out = out.with_columns(
-                    pl.when(pl.col('bin').is_null()).then(pl.lit('__OTHER__')).otherwise(pl.col('bin')).alias(f"{var}_bin")
-                ).drop(['raw','bin', f"__{var}_raw"])
+                    pl.when(pl.col(f'__{var}_bin_map').is_null()).then(pl.lit('__OTHER__')).otherwise(pl.col(f'__{var}_bin_map')).alias(f"{var}_bin")
+                )
+                drop_cols = [f"__{var}_raw", f'__{var}_raw_key', f'__{var}_bin_map']
+                out = out.drop([c for c in drop_cols if c in out.columns])
             else:
                 valid_bins = set(bdf.select("bin").to_series().to_list())
                 out = out.with_columns(
