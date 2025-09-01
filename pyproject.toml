@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scorecardpl"
-version = "0.1.0"
+version = "0.1.1"
 description = "A lightweight credit scoring toolkit (WOE/IV, binning, scorecard)"
 authors = [{ name = "Your Name" }]
 readme = "README.md"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import numpy as np
 import polars as pl
@@ -16,6 +16,15 @@ class ScorecardModel:
     base_score: float
     pdo: float
     odds: float
+
+    def summary(self) -> pl.DataFrame:
+        """Summarize the scorecard: per-variable coefficient estimate and points ranges.
+
+        Returns a Polars DataFrame with columns:
+        - variable, coef, nbin, woe_min, woe_max, points_min, points_max, points_mean, points_std
+        Includes a row for '__INTERCEPT__' with its points.
+        """
+        return scorecard_summary(self)
 
 
 def _train_lr_woe(df_woe: pl.DataFrame, y: str) -> LogisticRegression:
@@ -81,15 +90,16 @@ def scorecard_ply(df: Any, points_map: Dict[str, pl.DataFrame], score_col: str =
         if var == "__INTERCEPT__":
             continue
         woe_col = f"{var}_woe"
+        used_fast_path = False
         if woe_col in out.columns:
             # derive k from points/woe ratio (constant per variable)
             df_pm = pm.filter(pl.col("woe") != 0.0)
-            if df_pm.height == 0:
-                continue
-            ratio_df = df_pm.select((pl.col("points") / pl.col("woe")).alias("ratio"))
-            k = float(ratio_df.select(pl.col("ratio").median()).to_series().item())
-            total = total + (out.select(woe_col).to_series().fill_null(0.0) * k)
-        else:
+            if df_pm.height > 0:
+                ratio_df = df_pm.select((pl.col("points") / pl.col("woe")).alias("ratio"))
+                k = float(ratio_df.select(pl.col("ratio").median()).to_series().item())
+                total = total + (out.select(woe_col).to_series().fill_null(0.0) * k)
+                used_fast_path = True
+        if not used_fast_path:
             # fallback: join on bin labels
             bin_col = f"{var}_bin"
             if bin_col not in out.columns:
@@ -100,3 +110,118 @@ def scorecard_ply(df: Any, points_map: Dict[str, pl.DataFrame], score_col: str =
             total = total + pts
             out = out.drop(f"{var}_pts")
     return total
+
+
+def scorecard_components(
+    df: Any,
+    points_map: Dict[str, pl.DataFrame],
+    *,
+    include_intercept: bool = True,
+    total_col: str = "score",
+) -> pl.DataFrame:
+    """Compute per-variable point contributions and total score.
+
+    - df: DataFrame containing `<var>_bin` columns (use `woebin_ply(..., keep_bins=True)`).
+    - points_map: mapping built by scorecard or SHAP scorecard
+    - include_intercept: include an `intercept_points` column if present
+    - total_col: name of total score column
+
+    Returns a Polars DataFrame with columns `[<var>_points..., intercept_points?, total_col]`.
+    """
+    out = to_pl_df(df)
+    comp_cols: List[str] = []
+    # per-variable join on bin
+    for var, pm in points_map.items():
+        if var == "__INTERCEPT__":
+            continue
+        bin_col = f"{var}_bin"
+        if bin_col not in out.columns:
+            # cannot compute component without bin labels
+            continue
+        var_col = f"{var}_points"
+        m = pm.rename({"bin": bin_col, "points": var_col}).select([bin_col, var_col])
+        out = out.join(m, on=bin_col, how="left")
+        out = out.with_columns(pl.col(var_col).fill_null(0.0))
+        comp_cols.append(var_col)
+    # intercept
+    intercept_col = None
+    if include_intercept and "__INTERCEPT__" in points_map:
+        try:
+            bias = float(points_map["__INTERCEPT__"].select("points").item())
+        except Exception:
+            bias = 0.0
+        intercept_col = "intercept_points"
+        out = out.with_columns(pl.lit(bias).alias(intercept_col))
+    # total = sum of components (+ intercept)
+    total_inputs = comp_cols + ([intercept_col] if intercept_col else [])
+    if total_inputs:
+        out = out.with_columns(pl.sum_horizontal([pl.col(c) for c in total_inputs]).alias(total_col))
+        return out.select(total_inputs + [total_col])
+    # no components found
+    return pl.DataFrame({total_col: []})
+
+def scorecard_summary(sc: "ScorecardModel") -> pl.DataFrame:
+    """Create a per-variable summary for a trained scorecard model.
+
+    - sc: ScorecardModel
+    Returns a Polars DataFrame with per-variable stats and a row for the intercept.
+    """
+    factor = sc.pdo / np.log(2)
+    rows = []
+    intercept_points = 0.0
+    if "__INTERCEPT__" in sc.points_map:
+        try:
+            intercept_points = float(sc.points_map["__INTERCEPT__"].select("points").item())
+        except Exception:
+            intercept_points = 0.0
+    for var, pm in sc.points_map.items():
+        if var == "__INTERCEPT__":
+            continue
+        # estimate coefficient from points mapping: points = -factor * coef * woe
+        coef = np.nan
+        try:
+            ratio_df = pm.filter(pl.col("woe") != 0.0).select((pl.col("points") / pl.col("woe")).alias("ratio"))
+            if ratio_df.height > 0:
+                k = float(ratio_df.select(pl.col("ratio").median()).to_series().item())
+                coef = -k / factor
+        except Exception:
+            coef = np.nan
+        agg = pm.select([
+            pl.len().alias("nbin"),
+            pl.col("woe").min().alias("woe_min"),
+            pl.col("woe").max().alias("woe_max"),
+            pl.col("woe").mean().alias("woe_mean"),
+            pl.col("woe").std().alias("woe_std"),
+            pl.col("points").min().alias("points_min"),
+            pl.col("points").max().alias("points_max"),
+            pl.col("points").mean().alias("points_mean"),
+            pl.col("points").std().alias("points_std"),
+        ]).to_dicts()[0]
+        agg.update({"variable": var, "coef": float(coef) if coef == coef else np.nan})
+        rows.append(agg)
+    out = pl.DataFrame(rows)[
+        [
+            "variable",
+            "coef",
+            "nbin",
+            "woe_min",
+            "woe_max",
+            "points_min",
+            "points_max",
+            "points_mean",
+            "points_std",
+        ]
+    ].sort("variable")
+    # append intercept row
+    bias_df = pl.DataFrame({
+        "variable": ["__INTERCEPT__"],
+        "coef": [np.nan],
+        "nbin": [1],
+        "woe_min": [np.nan],
+        "woe_max": [np.nan],
+        "points_min": [intercept_points],
+        "points_max": [intercept_points],
+        "points_mean": [intercept_points],
+        "points_std": [0.0],
+    })
+    return pl.concat([out, bias_df], how="vertical")

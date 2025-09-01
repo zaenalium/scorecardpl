@@ -6,3 +6,7 @@ docs/_static
 docs/_templates
 scorecardpl.egg-info
 site
+*/.ipynb_checkpoints
+build
+notebooks/plots
+notebooks/reports

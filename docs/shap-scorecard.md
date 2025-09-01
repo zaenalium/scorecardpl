@@ -40,3 +40,14 @@ Notes:
 - The output `points_map` can be applied the same way as the standard scorecard.
 - If you use GBM (XGBoost/LightGBM), pass the sklearn wrapper (e.g., `XGBClassifier` or `LGBMClassifier`).
 
+Example notebooks:
+- `notebooks/german_credit_shap_xgboost.ipynb`
+- `notebooks/german_credit_shap_randomforest.ipynb`
+
+## Compatibility
+
+- SHAP versions differ in the shape of classifier attributions:
+  - Older: `(n_samples, n_classes, n_features)`; Newer (>=0.48): `(n_samples, n_features, n_outputs)`.
+  - `scorecardpl` normalizes these shapes internally to `(n_samples, n_features)` and uses the positive class.
+- For tree models, `TreeExplainer(model_output='log_odds')` is attempted first; if unsupported, a generic `Explainer` with a logit link is used so contributions are on the log-odds scale.
+- Base values are handled across SHAP versions and converted to a single intercept on the log-odds scale for the scorecard bias points.

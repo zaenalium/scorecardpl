@@ -8,7 +8,7 @@ import polars as pl
 
 from .utils import to_pl_df
 from .transform import woebin_ply
-from .scorecard import scorecard_ply
+from .scorecard import scorecard_ply, scorecard_components
 
 
 @dataclass
@@ -45,6 +45,16 @@ class SHAPScorecardModel:
         pts = scorecard_ply(woebin_ply(d, bins), self.points_map).to_numpy()
         return calibrator.points_to_proba(pts)
 
+    def predict_points_components(self, df: Any, bins: Dict[str, pl.DataFrame], total_col: str = "score") -> pl.DataFrame:
+        """Return per-variable point contributions and total score for SHAP scorecard.
+
+        Ensures `<var>_bin` columns are present via `woebin_ply` and joins to the
+        SHAP-derived `points_map` for each variable.
+        """
+        d = to_pl_df(df)
+        dw = woebin_ply(d, bins)  # keep_bins=True
+        return scorecard_components(dw, self.points_map, include_intercept=True, total_col=total_col)
+
 
 def _ensure_shap():
     try:
@@ -56,7 +66,7 @@ def _ensure_shap():
 def _compute_shap(estimator, X: np.ndarray, feature_names: Sequence[str], nsample: int = 20000):
     import shap
 
-    n = X.shape[0]
+    n, nf = X.shape[0], len(feature_names)
     if nsample and n > nsample:
         idx = np.random.default_rng(42).choice(n, size=nsample, replace=False)
         Xs = X[idx]
@@ -65,31 +75,58 @@ def _compute_shap(estimator, X: np.ndarray, feature_names: Sequence[str], nsampl
         Xs = X
         index = np.arange(n)
 
-    # Prefer TreeExplainer for tree models
-    explainer = None
+    # Prefer TreeExplainer for tree models; fall back to generic Explainer.
+    # For newer shap versions, TreeExplainer(model_output='log_odds') may not be supported
+    # with default perturbation, so we try it first, then fall back to a generic
+    # Explainer with a logit link to obtain contributions on the log-odds scale.
     try:
         explainer = shap.TreeExplainer(estimator, feature_names=feature_names, model_output="log_odds")
+        exp = explainer(Xs)
     except Exception:
         try:
-            explainer = shap.Explainer(estimator)
+            explainer = shap.Explainer(estimator, feature_names=feature_names, link=getattr(shap.links, "logit", shap.links.identity))
+            exp = explainer(Xs)
         except Exception as e:
             raise RuntimeError(f"Failed to create SHAP explainer: {e}")
 
-    exp = explainer(Xs)
-    # Normalize output to (ns, nf) and base scalar
-    # New shap returns Explanation with .values (ns, nf) for binary cls
-    values = getattr(exp, 'values', None)
+    # Normalize output to (ns, nf) and base scalar.
+    values = getattr(exp, "values", None)
     if values is None:
-        # older APIs
         values = exp
     values = np.array(values)
-    if values.ndim == 3:  # (ns, nclass, nf)
-        # pick positive class (assumed last)
-        values = values[:, -1, :]
-    base = getattr(exp, 'base_values', None)
-    if base is None:
-        base = 0.0
+
+    # Handle shape differences across SHAP versions:
+    # - Old: (ns, nclass, nf) => select last class => (ns, nf)
+    # - New: (ns, nf, nclass) => select last class => (ns, nf)
+    # - Binary simplified: (ns, nf)
+    if values.ndim == 3:
+        if values.shape[1] == nf:  # (ns, nf, nclass)
+            values = values[:, :, -1]
+        elif values.shape[2] == nf:  # (ns, nclass, nf)
+            values = values[:, -1, :]
+        else:
+            # Best-effort: choose the axis that matches nf as features
+            if nf in values.shape:
+                ax = list(values.shape).index(nf)
+                # Move features axis to position 1 and pick last class along the other axis
+                values = np.moveaxis(values, ax, 1)
+                # now values is (ns, nf, ?)
+                values = values[:, :, -1]
+            else:
+                raise RuntimeError(f"Unexpected SHAP values shape {values.shape}; cannot align features")
+    elif values.ndim == 2:
+        if values.shape[1] != nf:
+            # Some explainers may return transposed; attempt to fix
+            if values.shape[0] == nf:
+                values = values.T
+            else:
+                raise RuntimeError(f"SHAP values shape {values.shape} does not match n_features={nf}")
+
+    base = getattr(exp, "base_values", 0.0)
     base = np.array(base)
+    # For classification: base may be (ns, nclass); choose positive class
+    if base.ndim == 2:
+        base = base[:, -1]
     if base.ndim > 0:
         base = float(np.mean(base))
     else:
@@ -165,5 +202,25 @@ def scorecard_shap(
         'woe': [0.0],
         'points': [bias_points],
     })
+
+    # Ensure orientation: higher score for good (y=0), lower for bad (y=1)
+    try:
+        # Use the same sampled frame to estimate orientation
+        if y in df_sample.columns:
+            scores = scorecard_ply(df_sample, points_map).to_numpy()
+            yv_s = df_sample.select(y).to_numpy().ravel().astype(int)
+            mask0 = yv_s == 0
+            mask1 = yv_s == 1
+            if mask0.any() and mask1.any():
+                mu0 = float(np.mean(scores[mask0]))
+                mu1 = float(np.mean(scores[mask1]))
+                if not np.isnan(mu0) and not np.isnan(mu1) and mu0 <= mu1:
+                    # Flip sign of per-variable contributions; keep intercept unchanged
+                    for k in list(points_map.keys()):
+                        if k == '__INTERCEPT__':
+                            continue
+                        points_map[k] = points_map[k].with_columns((-pl.col('points')).alias('points'))
+    except Exception:
+        pass
 
     return SHAPScorecardModel(estimator=estimator, points_map=points_map, base_score=base_score, pdo=pdo, odds=odds)

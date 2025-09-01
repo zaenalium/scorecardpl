@@ -17,5 +17,6 @@ quickstart
 advanced-binning
 large-scale-guide
 shap-scorecard
+notebooks
 api/index
 ```

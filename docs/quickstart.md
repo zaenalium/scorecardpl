@@ -26,3 +26,5 @@ from scorecardpl import woebin_plot
 woe_paths = woebin_plot(bins, save_dir='plots/woe', show=False)
 print(woe_paths.get('age'))  # path to saved plot for 'age'
 ```
+
+See the Example Notebooks page for runnable, end-to-end notebooks: `docs/notebooks.md`.

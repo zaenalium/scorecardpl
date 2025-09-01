@@ -100,6 +100,16 @@ SHAP-based scorecards
   - `pip install shap` (and optionally `xgboost lightgbm`)
   - See `examples/shap_example.py` and docs: `docs/shap-scorecard.md`
 
+## Example Notebooks
+
+Runnable end-to-end notebooks are under `notebooks/`:
+- `german_credit_analysis.ipynb` — logistic scorecard pipeline with plots
+- `german_credit_shap_xgboost.ipynb` — SHAP-based scorecard with XGBoost
+- `german_credit_shap_randomforest.ipynb` — SHAP-based scorecard with RandomForest
+- `german_credit_calibration.ipynb` — mapping points to probabilities (logistic/isotonic)
+- `german_credit_drift_psi.ipynb` — PSI drift monitoring between train/valid
+- `scorecard_components_demo.ipynb` — per-variable point contributions
+
 
 ## Compare Binning Methods
 
